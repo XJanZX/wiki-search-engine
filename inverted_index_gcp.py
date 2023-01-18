@@ -1,7 +1,6 @@
 import io
 import os
 from collections import defaultdict, Counter
-import operator
 import pickle
 import hashlib
 from pathlib import Path
@@ -71,13 +70,13 @@ class MultiFileReader:
     def __init__(self):
         self._open_files = {}
         self.storage_client = storage.Client()
+        self.bucket = self.storage_client.bucket(BUCKET_NAME)
 
     def read(self, locs, n_bytes, base_dir):
         b = []
         for f_name, offset in locs:
             if f_name not in self._open_files:
-                bucket = self.storage_client.get_bucket(BUCKET_NAME)
-                blob = bucket.get_blob(f"{base_dir}/{f_name}")
+                blob = self.bucket.blob(f"{base_dir}/{f_name}")
                 self._open_files[f_name] = io.BytesIO(blob.download_as_string())
             f = self._open_files[f_name]
             f.seek(offset)
@@ -96,7 +95,7 @@ class MultiFileReader:
 
 
 class InvertedIndex:
-    def __init__(self, docs={}):
+    def __init__(self):
         """ Initializes the inverted index and add documents to it (if provided).
         Parameters:
         -----------
@@ -111,35 +110,22 @@ class InvertedIndex:
         # otherwise too big to store in memory.
         self._posting_list = defaultdict(list)
         # mapping a term to posting file locations, which is a list of
-        # (file_name, offset) pairs. Since posting lists are big we are going to
-        # write them to disk and just save their location in this list. We are
-        # using the MultiFileWriter helper class to write fixed-size files and store
-        # for each term/posting list its list of locations. The offset represents
-        # the number of bytes from the beginning of the file where the posting list
-        # starts.
+        # (file_name, offset) pairs.
         self.posting_locs = defaultdict(list)
 
-        for doc_id, tokens in docs.items():
-            self.add_doc(doc_id, tokens)
 
-    def add_doc(self, doc_id, tokens):
-        """ Adds a document to the index with a given `doc_id` and tokens. It counts
-            the tf of tokens, then update the index (in memory, no storage
-            side-effects).
-        """
-        self.DL[doc_id] = self.DL.get(doc_id, 0) + (len(tokens))
-        w2cnt = Counter(tokens)
-        self.term_total.update(w2cnt)
-        max_value = max(w2cnt.items(), key=operator.itemgetter(1))[1]
-        # frequencies = {key: value/max_value for key, value in frequencies.items()}
-        for w, cnt in w2cnt.items():
-            self.df[w] = self.df.get(w, 0) + 1
-            self._posting_list[w].append((doc_id, cnt))
+    @staticmethod
+    def read_index(bucket_name, base_dir, name):
+        os.system(f"gsutil cp gs://{bucket_name}/{base_dir}/{name}.pkl .")
+        with open(f'{name}.pkl', 'rb') as f:
+            res = pickle.load(f)
+            return res
+
 
     def read_posting_list(self, term, comp):
         posting_list = []
         with closing(MultiFileReader()) as reader:
-            if term in self.posting_locs.keys():
+            if term in self.posting_locs.keys() and self.df.keys():
                 locs = self.posting_locs[term]
                 # read a certain number of bytes into variable b
                 b = reader.read(locs, self.df[term] * TUPLE_SIZE, comp)
@@ -148,7 +134,8 @@ class InvertedIndex:
                     doc_id = int.from_bytes(b[i * TUPLE_SIZE:i * TUPLE_SIZE + 4], 'big')
                     tf = int.from_bytes(b[i * TUPLE_SIZE + 4:(i + 1) * TUPLE_SIZE], 'big')
                     posting_list.append((doc_id, tf))
-        return posting_list
+                return posting_list
+        return []
 
     def posting_lists_iter(self, query, comp):
         """ A generator that reads one posting list from disk and yields
@@ -213,12 +200,6 @@ class InvertedIndex:
         del state['_posting_list']
         return state
 
-    @staticmethod
-    def read_index(bucket_name, base_dir, name):
-        os.system(f"gsutil cp gs://{bucket_name}/{base_dir}/{name}.pkl .")
-        with open(f'{name}.pkl', 'rb') as f:
-            res = pickle.load(f)
-            return res
 
     @staticmethod
     def delete_index(base_dir, name):
