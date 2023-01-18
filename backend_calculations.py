@@ -15,12 +15,16 @@ def sorting_results_using_ranking(index, tokens, comp):
     :param tokens: list of tokens of query to search
     :return: list
     """
-
     index_scores_dict = {}
+    # Loop through each token in the input list of tokens
     for token in tokens:
+        # Read the posting list for the current token from the index
         pls = index.read_posting_list(token, comp)
+        # Loop through the posting list and add the score to the index_scores_dict
         for doc_id, tf in pls:
             index_scores_dict[doc_id] = index_scores_dict.get(doc_id, 0) + 1 / len(tokens)
+
+    # Sort the index_scores_dict by score in descending order and return as a list of tuples
     sorted_scores = sorted(index_scores_dict.items(), key=lambda pair: pair[1], reverse=True)
     return sorted_scores
 
@@ -45,7 +49,7 @@ def generate_query_tfidf_vector(query_to_search, index: InvertedIndex):
     -----------
     vectorized query with tfidf scores
     """
-
+    # Lecturer code
     epsilon = .0000001
     query_vec = np.zeros(len(query_to_search))
     counter = Counter(query_to_search)
@@ -54,25 +58,12 @@ def generate_query_tfidf_vector(query_to_search, index: InvertedIndex):
             tf = counter[token] / len(query_to_search)  # term frequency divided by the length of the query
             df = index.df[token]
             idf = math.log((len(index.DL)) / (df + epsilon), 10)  # smoothing
-
             try:
                 ind = query_to_search.index(token)
                 query_vec[ind] = tf * idf
             except:
                 pass
     return query_vec
-
-
-def get_posting_iter(index, comp):
-    """
-    This function returning the iterator working with posting list.
-
-    Parameters:
-    ----------
-    index: inverted index
-    """
-    words, pls = zip(*index.posting_lists_iter(comp))
-    return words, pls
 
 
 def get_candidate_documents_and_scores(query_to_search, index, comp):
@@ -98,15 +89,18 @@ def get_candidate_documents_and_scores(query_to_search, index, comp):
                                                                key: pair (doc_id,term)
                                                                value: tfidf score.
     """
+    # nearly same as the lecturer code
     candidates = {}
     for item in query_to_search:
-        pls = index.read_posting_list(item, comp)
-        if len(pls) != 0:
-            normalized_tfidf = [(doc_id, (freq / index.DL[doc_id]) * math.log(len(index.DL) / index.df[item], 10))
-                                for
-                                doc_id, freq in pls]
-            for doc_id, tfidf in normalized_tfidf:
-                candidates[(doc_id, item)] = candidates.get((doc_id, item), 0) + tfidf
+        if item in index.term_total.keys():
+            pls = index.read_posting_list(item, comp)
+            if len(pls) != 0:
+                normalized_tfidf = [(doc_id, (freq / index.DL[doc_id]) * math.log(len(index.DL) / index.df[item], 10))
+                                    for
+                                    doc_id, freq in pls]
+                for doc_id, tfidf in normalized_tfidf:
+                    if tfidf > 0.1:
+                        candidates[(doc_id, item)] = candidates.get((doc_id, item), 0) + tfidf
     return candidates
 
 
@@ -131,6 +125,7 @@ def generate_document_tfidf_matrix(query_to_search, index, comp):
     -----------
     DataFrame of tfidf scores.
     """
+    # lecturer code
     candidates_scores = get_candidate_documents_and_scores(query_to_search, index,
                                                            comp)  # We do not need to utilize all document. Only the documents which have corresponding terms with the query.
     unique_candidates = np.unique([doc_id for doc_id, freq in candidates_scores.keys()])
@@ -167,13 +162,15 @@ def cosine_similarity(doc_mat, query_vec):
                                                                 key: document id (e.g., doc_id)
                                                                 value: cosine similarity score.
     """
-    # YOUR CODE HERE
-
     cos_sim_scores = {}
+    # Loop through each document in the index of the document matrix
     for doc_id in doc_mat.index:
+        # Get the document vector for the current document
         doc_vec = doc_mat.loc[doc_id].values
-        cos_sim_scores[doc_id] = np.dot(doc_vec, query_vec) / (np.linalg.norm(query_vec) * np.linalg.norm(
-            query_vec))  # calculates the cosine similarity between two vectors doc_vec and Q. since we can't use sklearn.
+        # Calculate the cosine similarity between the document vector and the query vector
+        cos_sim = np.dot(doc_vec, query_vec) / (np.linalg.norm(query_vec) * np.linalg.norm(query_vec))
+        # Add the cosine similarity score to the cos_sim_scores dictionary with the document ID as the key
+        cos_sim_scores[doc_id] = cos_sim
     return cos_sim_scores
 
 
@@ -194,7 +191,7 @@ def get_top_n(sim_dict, n=3):
     -----------
     a ranked list of pairs (doc_id, score) in the length of N.
     """
-
+    # lecturer code
     return sorted([(doc_id, round(score, 5)) for doc_id, score in sim_dict.items()], key=lambda x: x[1], reverse=True)[
            :n]
 
@@ -217,8 +214,6 @@ def get_top_n_score_for_queries(queries_to_search, index, comp, n=3):
                                                         key: query_id
                                                         value: list of pairs in the following format:(doc_id, score).
     """
-    # words, pls = get_posting_iter(index, queries_to_search, comp)
-    # words = index.posting_locs.keys()
     doc_mat = generate_document_tfidf_matrix(queries_to_search, index,
                                              comp)  # DataFrame of tfidf scores (rows are documents candidate for a given query and columns are terms).
     query_vec = generate_query_tfidf_vector(queries_to_search, index)  # vectorized query with tfidf scores.
@@ -226,8 +221,8 @@ def get_top_n_score_for_queries(queries_to_search, index, comp, n=3):
     return get_top_n(sim_scores, n)  # save best N sim_scores of the query we are iterating at.
 
 
-def merge_results(title_scores, body_scores, anchor_scores, page_rank, page_views, title_weight=0.2, text_weight=0.2,
-                  anchor_weight=0.2, pr_weight=0.2, pv_weight=0.2, n=3):
+def merge_results(title_scores, body_scores, anchor_scores, page_rank, page_views, title_weight=0.45, text_weight=0.34,
+                  anchor_weight=0.04, pr_weight=0.12, pv_weight=0.05, n=3):
     """
     This function merge and sort documents retrieved by its weighted score (e.g., title and body).
 
@@ -246,6 +241,7 @@ def merge_results(title_scores, body_scores, anchor_scores, page_rank, page_view
                                                         key: query_id
                                                         value: list of pairs in the following format:(doc_id,score).
     """
+    # Find the maximum score in the title, body, and anchor scores list
     max_score_title = max(title_scores, key=lambda x: x[1])[1] if len(title_scores) != 0 else 1
     max_score_body = max(body_scores, key=lambda x: x[1])[1] if len(body_scores) != 0 else 1
     max_score_anchor = max(anchor_scores, key=lambda x: x[1])[1] if len(anchor_scores) != 0 else 1
@@ -253,6 +249,8 @@ def merge_results(title_scores, body_scores, anchor_scores, page_rank, page_view
     # Get all candidate doc_ids
     title_scores, body_scores, anchor_scores = dict(title_scores), dict(body_scores), dict(anchor_scores)
     all_candidate_docs = set(title_scores.keys()) | set(body_scores.keys()) | set(anchor_scores.keys())
+
+    # Get the maximum page rank and page views for the relevant documents
     relevant_page_ranks = []
     relevant_page_views = []
     for wiki_id in all_candidate_docs:
@@ -263,10 +261,12 @@ def merge_results(title_scores, body_scores, anchor_scores, page_rank, page_view
     max_page_ranks = max(relevant_page_ranks) if len(relevant_page_ranks) != 0 else 1
     max_page_views = max(relevant_page_views) if len(relevant_page_views) != 0 else 1
 
+    # Create a dictionary to store the merged scores
     merged_score_dict = {}
 
+    # Loop through all the candidate documents
     for doc_id in all_candidate_docs:
-        # calculate scores
+        # Calculate the scores for each metric
         try:
             page_rank_score = page_rank[str(doc_id)] * pr_weight / max_page_ranks
             page_view_score = page_views[str(doc_id)] * pv_weight / max_page_views
